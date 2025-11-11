@@ -36,7 +36,7 @@ import {
   List,
   Award,
   ZapOff,
-  XCircle, // New Icon
+  XCircle,
 } from 'lucide-react';
 
 // --- TYPES (for TypeScript) ---
@@ -68,7 +68,7 @@ type GameState = {
   revealed_answers_json: string;
   buzzer_state: 'armed' | 'locked';
   buzzer_winner: 'a' | 'b' | null;
-  strikes: number; // --- NEW: Added strikes ---
+  strikes: number;
 };
 type EditorData = Round[];
 type FullQuestion = Question & { answers: Answer[] };
@@ -119,12 +119,18 @@ export default function App() {
 
     // 3. Fetch initial game state
     const fetchGameState = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('game_state')
         .select('*')
         .eq('id', 1)
         .single();
-      if (data) setGameState(data as GameState); // Cast to new type
+      
+      if (error) {
+         console.error("CRITICAL ERROR: Could not fetch game state.", error);
+         // This is likely where the 406 error came from.
+         // Running schema.sql again will fix this.
+      }
+      if (data) setGameState(data as GameState);
     };
     fetchGameState();
 
@@ -369,7 +375,7 @@ function HostPage({
         buzzer_state: 'armed',
         buzzer_winner: null,
         revealed_answers_json: '[]',
-        strikes: 0, // --- NEW: Reset strikes ---
+        strikes: 0,
       })
       .eq('id', 1);
   };
@@ -389,7 +395,7 @@ function HostPage({
         buzzer_state: 'armed',
         buzzer_winner: null,
         revealed_answers_json: '[]',
-        strikes: 0, // --- NEW: Reset strikes ---
+        strikes: 0,
       })
       .eq('id', 1);
   };
@@ -401,7 +407,6 @@ function HostPage({
       .eq('id', 1);
   };
 
-  // --- NEW: Give Strike ---
   const handleGiveStrike = async () => {
     const currentStrikes = gameState.strikes || 0;
     if (currentStrikes >= 3) return;
@@ -449,7 +454,6 @@ function HostPage({
     <div className="flex h-screen bg-slate-900 text-white">
       {/* --- Left Sidebar: Questions --- */}
       <aside className="w-1/3 h-screen overflow-y-auto bg-slate-800 p-6 border-r border-slate-700">
-        {/* ... existing code ... */}
         <h1 className="text-3xl font-bold text-white mb-6">Host Panel</h1>
         <div className="space-y-6">
           {editorData.map((round) => (
@@ -482,7 +486,6 @@ function HostPage({
       <main className="w-2/3 h-screen overflow-y-auto p-8">
         {/* Scoreboard */}
         <div className="grid grid-cols-3 gap-6 items-center mb-8">
-          {/* ... existing code ... */}
           <ScoreBox
             name={gameState.team_a_name}
             score={gameState.team_a_score}
@@ -494,7 +497,7 @@ function HostPage({
             teamAName={gameState.team_a_name}
             teamBName={gameState.team_b_name}
             onReset={handleResetBuzzers}
-            strikes={gameState.strikes} // --- NEW: Pass strikes ---
+            strikes={gameState.strikes}
           />
           <ScoreBox
             name={gameState.team_b_name}
@@ -510,7 +513,6 @@ function HostPage({
         <div className="mb-8 p-6 bg-slate-800 rounded-lg">
           <h3 className="text-xl font-semibold mb-4">Global Controls</h3>
           <div className="flex gap-4">
-            {/* --- NEW: Give Strike Button --- */}
             <button
               onClick={handleGiveStrike}
               disabled={gameState.strikes >= 3}
@@ -545,7 +547,6 @@ function HostPage({
 
         {/* Current Question Board */}
         <div className="mt-8 p-6 bg-slate-800 rounded-lg">
-          {/* ... existing code ... */}
           <h2 className="text-2xl font-bold text-center mb-6">
             {currentQuestion?.text || 'No Question Selected'}
           </h2>
@@ -596,7 +597,6 @@ function HostPage({
 
         {/* Team Name Editor */}
         <div className="mt-8 grid grid-cols-2 gap-6">
-          {/* ... existing code ... */}
           <NameEditor
             name={gameState.team_a_name}
             color="indigo"
@@ -627,60 +627,28 @@ function DisplayPage({
     [gameState.revealed_answers_json]
   );
 
-  // --- REFINED: Sound Effects ---
-  const buzzerSfx = useMemo(
-    () =>
-      typeof Audio !== 'undefined'
-        ? new Audio(
-            'https://actions.google.com/sounds/v1/alarms/medium_bell_ringing_near.ogg'
-          )
-        : null,
-    []
-  );
-  const wrongAnswerSfx = useMemo(
-    () =>
-      typeof Audio !== 'undefined'
-        ? new Audio(
-            'https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg'
-          )
-        : null,
-    []
-  );
+  // --- SOUNDS REMOVED ---
+  // const buzzerSfx = useMemo(...)
+  // const wrongAnswerSfx = useMemo(...)
 
-  // --- REFINED: Sound Triggers (using React state, not sessionStorage) ---
-  const [lastBuzzerWinner, setLastBuzzerWinner] = useState(
-    gameState.buzzer_winner
-  );
+  // --- REFINED: Logic to show strike animation (no sound) ---
   const [lastStrikeCount, setLastStrikeCount] = useState(gameState.strikes);
 
   useEffect(() => {
     if (!gameState) return;
 
-    // --- Buzzer Sound Logic ---
-    // Play sound only on the transition from null -> 'a' or 'b'
-    if (gameState.buzzer_winner && lastBuzzerWinner === null) {
-      buzzerSfx?.play();
-    }
-    setLastBuzzerWinner(gameState.buzzer_winner); // Update tracker
-
-    // --- Strike Sound Logic ---
-    // Play sound only when strikes increase
+    // --- Strike Animation Logic ---
+    // Show animation only when strikes increase
     if (gameState.strikes > lastStrikeCount) {
-      wrongAnswerSfx?.play();
+      // wrongAnswerSfx?.play(); // <-- Sound removed
       setShowStrike(true);
       // Hide the strike animation after a moment
       setTimeout(() => setShowStrike(false), 1500);
     }
     setLastStrikeCount(gameState.strikes); // Update tracker
-  }, [
-    gameState,
-    buzzerSfx,
-    wrongAnswerSfx,
-    lastBuzzerWinner,
-    lastStrikeCount,
-  ]);
+  }, [gameState, lastStrikeCount]);
 
-  // --- NEW: Split answers into two columns ---
+  // Split answers into two columns
   const { leftAnswers, rightAnswers } = useMemo(() => {
     if (!currentQuestion) return { leftAnswers: [], rightAnswers: [] };
     
@@ -689,7 +657,7 @@ function DisplayPage({
       (a, b) => a.display_order - b.display_order
     );
     
-    // Split the array. Can be adjusted (e.g., 4 left, 4 right)
+    // Split the array.
     const mid = Math.ceil(sortedAnswers.length / 2);
     return {
       leftAnswers: sortedAnswers.slice(0, mid),
@@ -701,7 +669,6 @@ function DisplayPage({
     <div className="relative h-screen w-screen flex flex-col p-8 lg:p-12 overflow-hidden bg-slate-900 text-slate-100">
       {/* Scoreboard */}
       <div className="flex justify-between items-start mb-8 px-4 gap-6">
-        {/* ... existing code ... */}
         <ScoreBox
           name={gameState.team_a_name}
           score={gameState.team_a_score}
@@ -709,7 +676,6 @@ function DisplayPage({
           isWinner={gameState.buzzer_winner === 'a'}
           isDisplay={true}
         />
-        {/* --- NEW: Strike Display --- */}
         <StrikeDisplay count={gameState.strikes} />
         <ScoreBox
           name={gameState.team_b_name}
@@ -722,20 +688,18 @@ function DisplayPage({
 
       {/* Question */}
       <div className="w-full text-center mb-10 h-24 flex items-center justify-center">
-        {/* ... existing code ... */}
         <h1 className="text-5xl lg:text-7xl font-extrabold text-white text-shadow-lg">
           {currentQuestion?.text || 'Waiting for question...'}
         </h1>
       </div>
 
-      {/* --- NEW: Two-Column Answer Board --- */}
+      {/* Two-Column Answer Board */}
       <div
         className="flex-1 flex justify-center gap-6 lg:gap-8"
         style={{ perspective: 1000 }}
       >
         {/* Left Column */}
         <div className="w-1/2 flex flex-col gap-4 lg:gap-6">
-          {/* ... existing code ... */}
           {leftAnswers.map((answer) => (
             <AnswerCard
               key={answer.id}
@@ -748,7 +712,6 @@ function DisplayPage({
         </div>
         {/* Right Column */}
         <div className="w-1/2 flex flex-col gap-4 lg:gap-6">
-          {/* ... existing code ... */}
           {rightAnswers.map((answer) => (
             <AnswerCard
               key={answer.id}
@@ -761,7 +724,7 @@ function DisplayPage({
         </div>
       </div>
 
-      {/* --- NEW: Strike Animation Overlay --- */}
+      {/* Strike Animation Overlay */}
       <AnimatePresence>
         {showStrike && (
           <motion.div
@@ -893,7 +856,7 @@ function ScoreBox({
   score,
   color,
   isWinner = false,
-  isDisplay = false, // --- NEW: Flag for display-specific styles ---
+  isDisplay = false,
 }: {
   name: string;
   score: number;
@@ -912,10 +875,9 @@ function ScoreBox({
       ? 'ring-8 ring-amber-400 scale-105'
       : 'ring-1';
   
-  // --- NEW: Dynamic classes for display vs host ---
   const sizeClasses = isDisplay
-    ? 'p-6 lg:p-8 w-full max-w-md' // Full-width on mobile, max-width on larger screens
-    : 'p-6'; // Original size for host panel
+    ? 'p-6 lg:p-8 w-full max-w-md'
+    : 'p-6';
   
   const nameSize = isDisplay ? 'text-4xl lg:text-5xl' : 'text-3xl';
   const scoreSize = isDisplay ? 'text-8xl lg:text-9xl' : 'text-8xl';
@@ -936,16 +898,15 @@ function BuzzerStatus({
   teamAName,
   teamBName,
   onReset,
-  strikes, // --- NEW: Pass strikes ---
+  strikes,
 }: {
   state: 'armed' | 'locked';
   winner: 'a' | 'b' | null;
   teamAName: string;
   teamBName: string;
   onReset: () => void;
-  strikes: number; // --- NEW: Pass strikes ---
+  strikes: number;
 }) {
-  // --- NEW: Strike Display for Host ---
   const strikeDisplay = (
     <div className="flex justify-center gap-2 mt-2">
       {[1, 2, 3].map((i) => (
@@ -1086,7 +1047,7 @@ function NameEditor({
   );
 }
 
-// --- NEW: Editor Component with Delete ---
+// --- Editor Component with Delete ---
 function EditorComponent({ editorData }: { editorData: EditorData }) {
   // --- Form State ---
   const [roundName, setRoundName] = useState('');
@@ -1122,7 +1083,7 @@ function EditorComponent({ editorData }: { editorData: EditorData }) {
     setAOrder((o) => (parseInt(o, 10) + 1).toString());
   };
 
-  // --- NEW: Delete Handlers ---
+  // --- Delete Handlers ---
   const handleDeleteRound = async (id: string) => {
     if (window.confirm('Delete this round and all its questions?')) {
       await supabase.from('rounds').delete().eq('id', id);
@@ -1145,7 +1106,6 @@ function EditorComponent({ editorData }: { editorData: EditorData }) {
       <div className="grid md:grid-cols-3 gap-6">
         {/* --- Add Round --- */}
         <form onSubmit={handleAddRound} className="space-y-2">
-          {/* ... existing code ... */}
           <h4 className="font-semibold text-lg text-indigo-400">1. Add Round</h4>
           <input
             type="text"
@@ -1165,7 +1125,6 @@ function EditorComponent({ editorData }: { editorData: EditorData }) {
 
         {/* --- Add Question --- */}
         <form onSubmit={handleAddQuestion} className="space-y-2">
-          {/* ... existing code ... */}
           <h4 className="font-semibold text-lg text-indigo-400">2. Add Question</h4>
           <select
             value={qRound}
@@ -1193,7 +1152,6 @@ function EditorComponent({ editorData }: { editorData: EditorData }) {
 
         {/* --- Add Answer --- */}
         <form onSubmit={handleAddAnswer} className="space-y-2">
-          {/* ... existing code ... */}
           <h4 className="font-semibold text-lg text-indigo-400">3. Add Answer</h4>
           <select
             value={aQuestion}
@@ -1230,7 +1188,7 @@ function EditorComponent({ editorData }: { editorData: EditorData }) {
         </form>
       </div>
 
-      {/* --- NEW: Manage Data --- */}
+      {/* --- Manage Data --- */}
       <h3 className="text-xl font-semibold mt-12 mb-4">Manage Existing Data</h3>
       <div className="space-y-4 max-h-96 overflow-y-auto p-4 bg-slate-900 rounded-lg">
         {editorData.map((round) => (
@@ -1343,7 +1301,7 @@ function AnswerCard({
   );
 }
 
-// --- NEW: Strike Display Component ---
+// --- Strike Display Component ---
 function StrikeDisplay({ count }: { count: number }) {
   return (
     <div className="flex justify-center items-center gap-4">
