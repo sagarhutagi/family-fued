@@ -37,6 +37,12 @@ import {
   Award,
   ZapOff,
   XCircle,
+  Eye,
+  ChevronsRight,
+  Edit,
+  Home,
+  FileJson, // <-- New Icon
+  Loader2, // <-- New Icon
 } from 'lucide-react';
 
 // --- TYPES (for TypeScript) ---
@@ -73,6 +79,20 @@ type GameState = {
 type EditorData = Round[];
 type FullQuestion = Question & { answers: Answer[] };
 
+// --- JSON Importer Types ---
+type ImportAnswer = {
+  text: string;
+  order: number;
+};
+type ImportQuestion = {
+  text: string;
+  answers: ImportAnswer[];
+};
+type ImportRound = {
+  round_name: string;
+  questions: ImportQuestion[];
+};
+
 // --- SUPABASE CLIENT SETUP ---
 // You MUST create a .env.local file in your project root
 // and add your Supabase keys there.
@@ -106,16 +126,58 @@ export default function App() {
   );
 
   // --- DATA FETCHING & REALTIME SUBSCRIPTION ---
+  const fetchEditorData = async () => {
+    const { data: rounds, error } = await supabase.from('rounds').select(`
+      id,
+      name,
+      questions (
+        id,
+        round_id,
+        text,
+        answers (
+          id,
+          question_id,
+          text,
+          display_order
+        )
+      )
+    `);
+    if (rounds) {
+      // Sort answers by display_order
+      rounds.forEach((round) => {
+        round.questions.sort((a, b) => a.text.localeCompare(b.text)); // Sort questions
+        round.questions.forEach((question) => {
+          question.answers.sort((a, b) => a.display_order - b.display_order);
+        });
+      });
+      setEditorData(rounds as EditorData);
+    }
+    if (error) console.error('Error fetching editor data:', error);
+  };
+
   useEffect(() => {
     // 1. Check for admin status in session
-    setIsAdmin(sessionStorage.getItem('is_admin') === 'true');
+    // Use try...catch for browser-specific APIs
+    try {
+      setIsAdmin(sessionStorage.getItem('is_admin') === 'true');
+    } catch (e) {
+      console.warn('Session storage not available.');
+    }
 
     // 2. Set up page routing based on URL hash
     const handleHashChange = () => {
-      setPage(window.location.hash);
+      // Use try...catch for browser-specific APIs
+      try {
+        setPage(window.location.hash);
+      } catch (e) {
+        console.warn('Window location not available.');
+      }
     };
-    window.addEventListener('hashchange', handleHashChange);
-    handleHashChange(); // Set initial page
+    // Add listener only on client
+    if (typeof window !== 'undefined') {
+      window.addEventListener('hashchange', handleHashChange);
+      handleHashChange(); // Set initial page
+    }
 
     // 3. Fetch initial game state
     const fetchGameState = async () => {
@@ -134,34 +196,7 @@ export default function App() {
     };
     fetchGameState();
 
-    // 4. Fetch all editor data (rounds, questions, answers)
-    const fetchEditorData = async () => {
-      const { data: rounds, error } = await supabase.from('rounds').select(`
-        id,
-        name,
-        questions (
-          id,
-          round_id,
-          text,
-          answers (
-            id,
-            question_id,
-            text,
-            display_order
-          )
-        )
-      `);
-      if (rounds) {
-        // Sort answers by display_order
-        rounds.forEach((round) => {
-          round.questions.forEach((question) => {
-            question.answers.sort((a, b) => a.display_order - b.display_order);
-          });
-        });
-        setEditorData(rounds as EditorData);
-      }
-      if (error) console.error('Error fetching editor data:', error);
-    };
+    // 4. Fetch initial editor data
     fetchEditorData();
 
     // 5. --- REALTIME SUBSCRIPTIONS ---
@@ -188,7 +223,7 @@ export default function App() {
           schema: 'public',
           table: 'rounds',
         },
-        fetchEditorData
+        fetchEditorData // Refetch all data on any change
       )
       .on(
         'postgres_changes',
@@ -212,7 +247,9 @@ export default function App() {
 
     // 6. Cleanup subscriptions on unmount
     return () => {
-      window.removeEventListener('hashchange', handleHashChange);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('hashchange', handleHashChange);
+      }
       supabase.removeChannel(gameStateChannel);
       supabase.removeChannel(editorChannel);
     };
@@ -266,6 +303,12 @@ export default function App() {
         return <BuzzerPage gameState={gameState} />;
       case '#login':
         return <LoginPage onLogin={() => setIsAdmin(true)} />;
+      case '#editor': // <-- New Editor Page
+        if (!isAdmin) {
+          window.location.hash = '#login';
+          return null;
+        }
+        return <EditorPage editorData={editorData} onImport={fetchEditorData} />;
       default:
         return <LoginPage onLogin={() => setIsAdmin(true)} />;
     }
@@ -355,8 +398,6 @@ function HostPage({
   editorData: EditorData;
   currentQuestion: FullQuestion | null;
 }) {
-  const [showEditor, setShowEditor] = useState(false);
-
   const revealedAnswers = useMemo(
     () => JSON.parse(gameState.revealed_answers_json) as string[],
     [gameState.revealed_answers_json]
@@ -449,6 +490,20 @@ function HostPage({
       .eq('id', 1);
   };
 
+  // --- NEW: Reveal All Answers ---
+  const handleRevealAll = async () => {
+    if (!currentQuestion) return;
+
+    // Get all answer IDs for the current question
+    const allAnswerIds = currentQuestion.answers.map(a => a.id);
+    
+    await supabase.from('game_state').update({
+      revealed_answers_json: JSON.stringify(allAnswerIds),
+      buzzer_state: 'locked', // Lock board when round is over
+      buzzer_winner: null,
+    }).eq('id', 1);
+  };
+
   // --- Render ---
   return (
     <div className="flex h-screen bg-slate-900 text-white">
@@ -515,7 +570,7 @@ function HostPage({
           <div className="flex gap-4">
             <button
               onClick={handleGiveStrike}
-              disabled={gameState.strikes >= 3}
+              disabled={gameState.strikes >= 3 || !currentQuestion}
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 rounded-lg hover:bg-red-500 transition-colors disabled:bg-slate-600 disabled:opacity-50"
             >
               <XCircle size={18} />
@@ -533,17 +588,15 @@ function HostPage({
             >
               Reset All Scores
             </button>
-            <button
-              onClick={() => setShowEditor(!showEditor)}
-              className="flex-1 px-4 py-2 bg-green-700 rounded-lg hover:bg-green-600 transition-colors"
+            <a
+              href="/#editor"
+              target="_blank"
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-700 rounded-lg hover:bg-green-600 transition-colors"
             >
-              {showEditor ? 'Hide Editor' : 'Show Question Editor'}
-            </button>
+              <Edit size={18} /> Open Editor
+            </a>
           </div>
         </div>
-
-        {/* Editor (Collapsible) */}
-        {showEditor && <EditorComponent editorData={editorData} />}
 
         {/* Current Question Board */}
         <div className="mt-8 p-6 bg-slate-800 rounded-lg">
@@ -593,6 +646,15 @@ function HostPage({
               );
             })}
           </div>
+          {/* New Reveal All Button */}
+          {currentQuestion && (
+             <button
+              onClick={handleRevealAll}
+              className="w-full mt-4 flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 rounded-lg hover:bg-indigo-500 transition-colors"
+             >
+                <Eye size={18} /> Reveal All Answers
+             </button>
+          )}
         </div>
 
         {/* Team Name Editor */}
@@ -626,23 +688,14 @@ function DisplayPage({
     () => JSON.parse(gameState.revealed_answers_json) as string[],
     [gameState.revealed_answers_json]
   );
-
-  // --- SOUNDS REMOVED ---
-  // const buzzerSfx = useMemo(...)
-  // const wrongAnswerSfx = useMemo(...)
-
-  // --- REFINED: Logic to show strike animation (no sound) ---
   const [lastStrikeCount, setLastStrikeCount] = useState(gameState.strikes);
 
   useEffect(() => {
     if (!gameState) return;
 
     // --- Strike Animation Logic ---
-    // Show animation only when strikes increase
     if (gameState.strikes > lastStrikeCount) {
-      // wrongAnswerSfx?.play(); // <-- Sound removed
       setShowStrike(true);
-      // Hide the strike animation after a moment
       setTimeout(() => setShowStrike(false), 1500);
     }
     setLastStrikeCount(gameState.strikes); // Update tracker
@@ -657,7 +710,6 @@ function DisplayPage({
       (a, b) => a.display_order - b.display_order
     );
     
-    // Split the array.
     const mid = Math.ceil(sortedAnswers.length / 2);
     return {
       leftAnswers: sortedAnswers.slice(0, mid),
@@ -750,12 +802,22 @@ function DisplayPage({
 function BuzzerPage({ gameState }: { gameState: GameState }) {
   const [team, setTeam] = useState<'a' | 'b' | null>(null);
 
+  useEffect(() => {
+    try {
+      setTeam(sessionStorage.getItem('buzzer_team') as 'a' | 'b');
+    } catch (e) {}
+  }, []);
+
+  const handleSetTeam = (t: 'a' | 'b') => {
+    try {
+      sessionStorage.setItem('buzzer_team', t);
+    } catch (e) {}
+    setTeam(t);
+  };
+
   const handleBuzz = async () => {
     if (!team || gameState.buzzer_state !== 'armed') return;
 
-    // This is an "optimistic" update. We try to update the state
-    // only if the buzzer_state is still 'armed'.
-    // This prevents two people from buzzing at the same time.
     await supabase
       .from('game_state')
       .update({
@@ -774,13 +836,13 @@ function BuzzerPage({ gameState }: { gameState: GameState }) {
         </h1>
         <div className="flex flex-col sm:flex-row gap-8">
           <button
-            onClick={() => setTeam('a')}
+            onClick={() => handleSetTeam('a')}
             className="px-12 py-8 bg-indigo-600 text-white text-3xl font-bold rounded-lg shadow-xl hover:bg-indigo-500"
           >
             {gameState.team_a_name}
           </button>
           <button
-            onClick={() => setTeam('b')}
+            onClick={() => handleSetTeam('b')}
             className="px-12 py-8 bg-amber-600 text-black text-3xl font-bold rounded-lg shadow-xl hover:bg-amber-500"
           >
             {gameState.team_b_name}
@@ -849,7 +911,186 @@ function BuzzerPage({ gameState }: { gameState: GameState }) {
   );
 }
 
-// --- 6. HOST PAGE SUB-COMPONENTS ---
+// --- 6. NEW EDITOR PAGE ---
+function EditorPage({
+  editorData,
+  onImport
+}: {
+  editorData: EditorData;
+  onImport: () => void;
+}) {
+  const [selectedRound, setSelectedRound] = useState<Round | null>(null);
+  const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(
+    null
+  );
+  const [showImporter, setShowImporter] = useState(false);
+
+  // --- Handlers ---
+  const handleSelectRound = (round: Round) => {
+    setSelectedRound(round);
+    setSelectedQuestion(null); // Clear question selection
+  };
+  const handleSelectQuestion = (question: Question) => {
+    setSelectedQuestion(question);
+  };
+
+  const handleDeleteRound = async (id: string) => {
+    if (window.confirm('Delete this round and all its questions?')) {
+      await supabase.from('rounds').delete().eq('id', id);
+      setSelectedRound(null);
+      setSelectedQuestion(null);
+    }
+  };
+  const handleDeleteQuestion = async (id: string) => {
+    if (window.confirm('Delete this question and all its answers?')) {
+      await supabase.from('questions').delete().eq('id', id);
+      setSelectedQuestion(null);
+      // Note: Editor data will refresh automatically via subscription
+    }
+  };
+  const handleDeleteAnswer = async (id: string) => {
+    if (window.confirm('Delete this answer?')) {
+      await supabase.from('answers').delete().eq('id', id);
+      // Note: Editor data will refresh automatically via subscription
+    }
+  };
+
+  return (
+    <div className="h-screen w-screen flex bg-slate-900 text-white">
+      {/* Column 1: Rounds List */}
+      <aside className="w-1/3 h-screen overflow-y-auto bg-slate-800 p-6 border-r border-slate-700">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-3xl font-bold text-white">Question Editor</h1>
+          <a
+            href="/#host"
+            className="flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-500"
+          >
+            <Home size={16} /> Host Panel
+          </a>
+        </div>
+        
+        {/* Import/Add */}
+        <div className="flex gap-4 mb-4">
+          <button
+            onClick={() => setShowImporter(true)}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-500"
+          >
+            <FileJson size={18} /> Import from JSON
+          </button>
+          <AddRoundForm />
+        </div>
+        
+        {/* Rounds List */}
+        <div className="space-y-2">
+          {editorData.map((round) => (
+            <div
+              key={round.id}
+              className={`p-3 rounded-lg flex items-center justify-between transition-colors ${
+                selectedRound?.id === round.id
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-700 hover:bg-slate-600'
+              }`}
+            >
+              <button
+                onClick={() => handleSelectRound(round)}
+                className="flex-1 text-left font-semibold"
+              >
+                {round.name}
+              </button>
+              <button
+                onClick={() => handleDeleteRound(round.id)}
+                className="ml-2 p-1 text-red-400 hover:text-red-300"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      {/* Column 2: Questions / Answers */}
+      <main className="w-2/3 h-screen overflow-y-auto p-8">
+        {!selectedRound ? (
+          <div className="h-full flex items-center justify-center">
+            <h2 className="text-2xl text-slate-400">
+              Select a round to begin
+            </h2>
+          </div>
+        ) : (
+          <div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-3xl font-bold">
+                Round: {selectedRound.name}
+              </h2>
+              <AddQuestionForm roundId={selectedRound.id} />
+            </div>
+
+            {/* Questions List */}
+            <div className="space-y-4">
+              {selectedRound.questions.map((q) => (
+                <div
+                  key={q.id}
+                  className={`p-4 rounded-lg ${
+                    selectedQuestion?.id === q.id
+                      ? 'bg-slate-700'
+                      : 'bg-slate-800'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <button
+                      onClick={() => handleSelectQuestion(q)}
+                      className="text-xl font-semibold text-left flex-1 hover:text-indigo-400"
+                    >
+                      {q.text}
+                    </button>
+                    <button
+                      onClick={() => handleDeleteQuestion(q.id)}
+                      className="ml-2 p-1 text-red-400 hover:text-red-300"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                  
+                  {/* Answer Manager (visible when question is selected) */}
+                  {selectedQuestion?.id === q.id && (
+                    <div className="mt-4 pt-4 border-t border-slate-600">
+                      <h4 className="text-lg font-semibold mb-2 text-indigo-400">Manage Answers</h4>
+                      <AddAnswerForm questionId={q.id} />
+                      <div className="space-y-2 mt-4">
+                        {selectedQuestion.answers.map(a => (
+                          <div key={a.id} className="flex items-center justify-between p-2 bg-slate-800 rounded">
+                            <div>
+                              <span className="font-mono bg-slate-600 px-2 py-1 rounded text-sm">#{a.display_order}</span>
+                              <span className="ml-3">{a.text}</span>
+                            </div>
+                            <button
+                              onClick={() => handleDeleteAnswer(a.id)}
+                              className="p-1 text-red-500 hover:text-red-400"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Importer Modal */}
+      {showImporter && <ImporterModal onClose={() => {
+        setShowImporter(false);
+        onImport(); // Re-fetch data
+      }} />}
+    </div>
+  );
+}
+
+// --- 7. HOST PAGE SUB-COMPONENTS ---
 
 function ScoreBox({
   name,
@@ -1047,204 +1288,267 @@ function NameEditor({
   );
 }
 
-// --- Editor Component with Delete ---
-function EditorComponent({ editorData }: { editorData: EditorData }) {
-  // --- Form State ---
-  const [roundName, setRoundName] = useState('');
-  const [qRound, setQRound] = useState('');
-  const [qText, setQText] = useState('');
-  const [aQuestion, setAQuestion] = useState('');
-  const [aText, setAText] = useState('');
-  const [aOrder, setAOrder] = useState('1');
+// --- 8. EDITOR PAGE SUB-COMPONENTS ---
 
-  // --- Form Handlers ---
-  const handleAddRound = async (e: React.FormEvent) => {
+function AddRoundForm() {
+  const [name, setName] = useState('');
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await supabase.from('rounds').insert({ name: roundName });
-    setRoundName('');
+    if (!name) return;
+    await supabase.from('rounds').insert({ name });
+    setName('');
   };
+  return (
+    <form onSubmit={handleSubmit} className="flex-1 flex gap-2">
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="New Round Name"
+        className="flex-1 px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
+      />
+      <button
+        type="submit"
+        className="p-2 bg-green-600 rounded-lg hover:bg-green-500"
+      >
+        <Plus size={20} />
+      </button>
+    </form>
+  );
+}
 
-  const handleAddQuestion = async (e: React.FormEvent) => {
+function AddQuestionForm({ roundId }: { roundId: string }) {
+  const [text, setText] = useState('');
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await supabase
-      .from('questions')
-      .insert({ round_id: qRound, text: qText });
-    setQText('');
+    if (!text) return;
+    await supabase.from('questions').insert({ round_id: roundId, text });
+    setText('');
   };
+  return (
+    <form onSubmit={handleSubmit} className="flex-1 flex gap-2">
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="New Question Text"
+        className="flex-1 px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
+      />
+      <button
+        type="submit"
+        className="p-2 bg-green-600 rounded-lg hover:bg-green-500"
+      >
+        <Plus size={20} />
+      </button>
+    </form>
+  );
+}
 
-  const handleAddAnswer = async (e: React.FormEvent) => {
+function AddAnswerForm({ questionId }: { questionId: string }) {
+  const [text, setText] = useState('');
+  const [order, setOrder] = useState('1');
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!text || !order) return;
     await supabase.from('answers').insert({
-      question_id: aQuestion,
-      text: aText,
-      display_order: parseInt(aOrder, 10),
+      question_id: questionId,
+      text,
+      display_order: parseInt(order, 10),
     });
-    setAText('');
-    setAOrder((o) => (parseInt(o, 10) + 1).toString());
+    setText('');
+    setOrder((o) => (parseInt(o, 10) + 1).toString());
   };
+  return (
+    <form onSubmit={handleSubmit} className="flex gap-2">
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Answer Text"
+        className="flex-1 px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
+      />
+      <input
+        type="number"
+        value={order}
+        onChange={(e) => setOrder(e.target.value)}
+        placeholder="Order"
+        className="w-20 px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
+      />
+      <button
+        type="submit"
+        className="p-2 bg-green-600 rounded-lg hover:bg-green-500"
+      >
+        <Plus size={20} />
+      </button>
+    </form>
+  );
+}
 
-  // --- Delete Handlers ---
-  const handleDeleteRound = async (id: string) => {
-    if (window.confirm('Delete this round and all its questions?')) {
-      await supabase.from('rounds').delete().eq('id', id);
+// --- 9. NEW IMPORTER MODAL ---
+
+const jsonExample = `
+[
+  {
+    "round_name": "Survey Says",
+    "questions": [
+      {
+        "text": "Name a popular pizza topping.",
+        "answers": [
+          { "text": "Pepperoni", "order": 1 },
+          { "text": "Mushrooms", "order": 2 },
+          { "text": "Onions", "order": 3 }
+        ]
+      },
+      {
+        "text": "Name a country in Europe.",
+        "answers": [
+          { "text": "France", "order": 1 },
+          { "text": "Germany", "order": 2 },
+          { "text": "Spain", "order": 3 }
+        ]
+      }
+    ]
+  }
+]
+`;
+
+function ImporterModal({ onClose }: { onClose: () => void }) {
+  const [jsonText, setJsonText] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [status, setStatus] = useState({ message: '', error: false });
+
+  const handleImport = async () => {
+    setIsLoading(true);
+    setStatus({ message: 'Parsing JSON...', error: false });
+
+    let data: ImportRound[];
+    try {
+      data = JSON.parse(jsonText);
+      if (!Array.isArray(data)) {
+        throw new Error('JSON must be an array of rounds.');
+      }
+    } catch (e: any) {
+      setStatus({ message: `Invalid JSON: ${e.message}`, error: true });
+      setIsLoading(false);
+      return;
     }
-  };
-  const handleDeleteQuestion = async (id: string) => {
-    if (window.confirm('Delete this question and all its answers?')) {
-      await supabase.from('questions').delete().eq('id', id);
-    }
-  };
-  const handleDeleteAnswer = async (id: string) => {
-    if (window.confirm('Delete this answer?')) {
-      await supabase.from('answers').delete().eq('id', id);
+
+    try {
+      for (const round of data) {
+        setStatus({ message: `Importing round: ${round.round_name}`, error: false });
+        
+        // 1. Insert the Round
+        const { data: newRound, error: roundError } = await supabase
+          .from('rounds')
+          .insert({ name: round.round_name })
+          .select()
+          .single();
+        if (roundError) throw new Error(`Failed to create round: ${roundError.message}`);
+        
+        // 2. Prepare Questions for this Round
+        const questionsToInsert = round.questions.map(q => ({
+          text: q.text,
+          round_id: newRound.id
+        }));
+
+        if (questionsToInsert.length === 0) continue;
+
+        // 3. Insert Questions
+        const { data: newQuestions, error: qError } = await supabase
+          .from('questions')
+          .insert(questionsToInsert)
+          .select();
+        if (qError) throw new Error(`Failed to create questions: ${qError.message}`);
+
+        // 4. Prepare Answers for all new Questions
+        const answersToInsert = [];
+        for (let i = 0; i < newQuestions.length; i++) {
+          const newQuestion = newQuestions[i];
+          const originalQuestion = round.questions[i]; // Find by index
+          for (const answer of originalQuestion.answers) {
+            answersToInsert.push({
+              text: answer.text,
+              display_order: answer.order,
+              question_id: newQuestion.id
+            });
+          }
+        }
+        
+        // 5. Insert all Answers
+        if (answersToInsert.length > 0) {
+          const { error: aError } = await supabase.from('answers').insert(answersToInsert);
+          if (aError) throw new Error(`Failed to create answers: ${aError.message}`);
+        }
+      }
+
+      setStatus({ message: 'Import complete! All rounds added.', error: false });
+      setIsLoading(false);
+      setJsonText('');
+      setTimeout(onClose, 1500); // Close modal on success
+
+    } catch (e: any) {
+      setStatus({ message: e.message, error: true });
+      setIsLoading(false);
     }
   };
 
   return (
-    <div className="mb-8 p-6 bg-slate-800 rounded-lg">
-      <h3 className="text-xl font-semibold mb-4">Add New Data</h3>
-      <div className="grid md:grid-cols-3 gap-6">
-        {/* --- Add Round --- */}
-        <form onSubmit={handleAddRound} className="space-y-2">
-          <h4 className="font-semibold text-lg text-indigo-400">1. Add Round</h4>
-          <input
-            type="text"
-            placeholder="Round Name"
-            value={roundName}
-            onChange={(e) => setRoundName(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
-            required
-          />
-          <button
-            type="submit"
-            className="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-semibold"
-          >
-            Add Round
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="w-full max-w-4xl h-[80vh] bg-slate-800 text-white rounded-lg shadow-xl flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-slate-700">
+          <h2 className="text-2xl font-bold">Import from JSON</h2>
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white">
+            <XCircle size={24} />
           </button>
-        </form>
+        </div>
 
-        {/* --- Add Question --- */}
-        <form onSubmit={handleAddQuestion} className="space-y-2">
-          <h4 className="font-semibold text-lg text-indigo-400">2. Add Question</h4>
-          <select
-            value={qRound}
-            onChange={(e) => setQRound(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
-            required
-          >
-            <option value="" disabled>Select a Round</option>
-            {editorData.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </select>
-          <input
-            type="text"
-            placeholder="Question Text"
-            value={qText}
-            onChange={(e) => setQText(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
-            required
-          />
-          <button type="submit" className="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-semibold">
-            Add Question
-          </button>
-        </form>
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left: Format Guide */}
+          <aside className="w-1/2 p-6 overflow-y-auto border-r border-slate-700">
+            <h3 className="text-lg font-semibold mb-2">Required Format</h3>
+            <p className="text-sm text-slate-400 mb-4">
+              Your JSON must be an array of rounds, following this structure.
+            </p>
+            <pre className="p-4 bg-slate-900 text-sm rounded-lg overflow-x-auto">
+              <code>{jsonExample}</code>
+            </pre>
+          </aside>
 
-        {/* --- Add Answer --- */}
-        <form onSubmit={handleAddAnswer} className="space-y-2">
-          <h4 className="font-semibold text-lg text-indigo-400">3. Add Answer</h4>
-          <select
-            value={aQuestion}
-            onChange={(e) => setAQuestion(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
-            required
-          >
-            <option value="" disabled>Select a Question</option>
-            {editorData.flatMap((r) =>
-              r.questions.map((q) => (
-                <option key={q.id} value={q.id}>{q.text.substring(0, 40)}...</option>
-              ))
-            )}
-          </select>
-          <input
-            type="text"
-            placeholder="Answer Text"
-            value={aText}
-            onChange={(e) => setAText(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
-            required
-          />
-          <input
-            type="number"
-            placeholder="Display Order"
-            value={aOrder}
-            onChange={(e) => setAOrder(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-700 rounded-lg border border-slate-600"
-            required
-          />
-          <button type="submit" className="w-full px-4 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-semibold">
-            Add Answer
-          </button>
-        </form>
-      </div>
-
-      {/* --- Manage Data --- */}
-      <h3 className="text-xl font-semibold mt-12 mb-4">Manage Existing Data</h3>
-      <div className="space-y-4 max-h-96 overflow-y-auto p-4 bg-slate-900 rounded-lg">
-        {editorData.map((round) => (
-          <div key={round.id} className="p-3 bg-slate-800 rounded">
-            <div className="flex justify-between items-center">
-              <span className="text-lg font-bold text-indigo-400">
-                {round.name}
-              </span>
+          {/* Right: Importer */}
+          <main className="w-1/2 p-6 flex flex-col">
+            <h3 className="text-lg font-semibold mb-2">Paste your JSON here:</h3>
+            <textarea
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              placeholder="[ { ... } ]"
+              className="flex-1 w-full p-4 bg-slate-900 text-white rounded-lg border border-slate-700 font-mono text-sm resize-none"
+            />
+            
+            {/* Status & Button */}
+            <div className="mt-4 flex items-center gap-4">
               <button
-                onClick={() => handleDeleteRound(round.id)}
-                className="p-1 text-red-500 hover:text-red-400"
+                onClick={handleImport}
+                disabled={isLoading}
+                className="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-500 disabled:bg-slate-600 flex items-center gap-2"
               >
-                <Trash2 size={18} />
+                {isLoading ? <Loader2 size={18} className="animate-spin" /> : <FileJson size={18} />}
+                {isLoading ? 'Importing...' : 'Parse & Import'}
               </button>
+              {status.message && (
+                <span className={status.error ? 'text-red-400' : 'text-green-400'}>
+                  {status.message}
+                </span>
+              )}
             </div>
-            <div className="ml-4 mt-2 space-y-2">
-              {round.questions.map((q) => (
-                <div key={q.id} className="p-2 bg-slate-700 rounded">
-                  <div className="flex justify-between items-center">
-                    <span className="font-semibold">{q.text}</span>
-                    <button
-                      onClick={() => handleDeleteQuestion(q.id)}
-                      className="p-1 text-red-500 hover:text-red-400"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                  <div className="ml-4 mt-1 space-y-1">
-                    {q.answers.map((a) => (
-                      <div
-                        key={a.id}
-                        className="flex justify-between items-center text-sm"
-                      >
-                        <span className="text-slate-300">
-                          (#{a.display_order}) {a.text}
-                        </span>
-                        <button
-                          onClick={() => handleDeleteAnswer(a.id)}
-                          className="p-1 text-red-500 hover:text-red-400"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
+          </main>
+        </div>
       </div>
     </div>
   );
 }
 
-// --- 7. DISPLAY PAGE SUB-COMPONENTS ---
+
+// --- 10. DISPLAY PAGE SUB-COMPONENTS ---
 
 function AnswerCard({
   order,
@@ -1259,73 +1563,65 @@ function AnswerCard({
 }) {
   return (
     <div
-      className="card relative w-full h-28 lg:h-36 rounded-lg"
-      style={{ transformStyle: 'preserve-3d', transition: 'transform 0.6s' }}
+      className="w-full h-24 lg:h-28 rounded-xl shadow-lg border-4 border-slate-600"
+      style={{ transformStyle: 'preserve-3d' }}
     >
-      <AnimatePresence>
-        {!isRevealed ? (
-          // --- Front Face (Hidden) ---
-          <motion.div
-            key="front"
-            initial={false}
-            animate={{ rotateY: 0 }}
-            exit={{ rotateY: 90 }}
-            transition={{ duration: 0.3 }}
-            className="card-face absolute w-full h-full flex items-center justify-center rounded-lg text-6xl lg:text-8xl font-black
-                        bg-slate-800 ring-1 ring-slate-700 text-indigo-400"
-            style={{ backfaceVisibility: 'hidden' }}
-          >
+      <motion.div
+        className="relative w-full h-full"
+        initial={false}
+        animate={{ rotateY: isRevealed ? 180 : 0 }}
+        transition={{ duration: 0.5, type: 'spring' }}
+        style={{ transformStyle: 'preserve-3d' }}
+      >
+        {/* Front (Hidden) */}
+        <div
+          className="absolute inset-0 w-full h-full bg-indigo-700 rounded-lg flex items-center justify-center p-4"
+          style={{ backfaceVisibility: 'hidden' }}
+        >
+          <span className="text-4xl lg:text-6xl font-black text-indigo-300">
             {order}
-          </motion.div>
-        ) : (
-          // --- Back Face (Revealed) ---
-          <motion.div
-            key="back"
-            initial={{ rotateY: -90 }}
-            animate={{ rotateY: 0 }}
-            transition={{ duration: 0.3, delay: 0.3 }}
-            className="card-face absolute w-full h-full flex items-center justify-between p-4 lg:p-8 rounded-lg
-                        bg-slate-700 ring-1 ring-slate-600"
-            style={{ backfaceVisibility: 'hidden' }}
-          >
-            <span className="text-3xl lg:text-4xl font-bold uppercase text-slate-100 truncate pr-4">
-              {text}
-            </span>
-            <span className="text-4xl lg:text-5xl font-black text-amber-400">
-              {points}
-            </span>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          </span>
+        </div>
+
+        {/* Back (Revealed) */}
+        <div
+          className="absolute inset-0 w-full h-full bg-slate-700 rounded-lg flex items-center justify-between p-6"
+          style={{ transform: 'rotateY(180deg)', backfaceVisibility: 'hidden' }}
+        >
+          <span className="text-2xl lg:text-4xl font-semibold uppercase truncate">
+            {text}
+          </span>
+          <span className="text-3xl lg:text-5xl font-bold text-amber-400">
+            {points}
+          </span>
+        </div>
+      </motion.div>
     </div>
   );
 }
 
-// --- Strike Display Component ---
 function StrikeDisplay({ count }: { count: number }) {
   return (
-    <div className="flex justify-center items-center gap-4">
+    <div className="flex flex-col items-center">
       {[1, 2, 3].map((i) => (
-        <AnimatePresence key={i}>
-          {i <= count && (
-            <motion.div
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{
-                type: 'spring',
-                stiffness: 500,
-                damping: 30,
-                delay: i * 0.1,
-              }}
-            >
-              <XCircle
-                size={64}
-                className="text-red-600"
-                strokeWidth={1.5}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <motion.div
+          key={i}
+          animate={{
+            scale: i <= count ? 1 : 0.7,
+            opacity: i <= count ? 1 : 0.3,
+          }}
+          transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+        >
+          <XCircle
+            size={64}
+            className={
+              i <= count
+                ? 'text-red-600'
+                : 'text-slate-700'
+            }
+            strokeWidth={1.5}
+          />
+        </motion.div>
       ))}
     </div>
   );
