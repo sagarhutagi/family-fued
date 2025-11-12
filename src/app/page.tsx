@@ -43,6 +43,7 @@ import {
   Home,
   FileJson, // <-- New Icon
   Loader2, // <-- New Icon
+  Check, // <-- New Icon
 } from 'lucide-react';
 
 // --- TYPES (for TypeScript) ---
@@ -408,6 +409,14 @@ function HostPage({
     await supabase.from('game_state').update({ [field]: name }).eq('id', 1);
   };
 
+  // --- NEW: Manual Score Set ---
+  const handleSetScore = async (team: 'a' | 'b', score: number) => {
+    // Ensure score is a valid number
+    const newScore = isNaN(score) ? 0 : score;
+    const field = team === 'a' ? 'team_a_score' : 'team_b_score';
+    await supabase.from('game_state').update({ [field]: newScore }).eq('id', 1);
+  };
+
   const handleSetQuestion = async (qId: string) => {
     await supabase
       .from('game_state')
@@ -490,7 +499,7 @@ function HostPage({
       .eq('id', 1);
   };
 
-  // --- NEW: Reveal All Answers ---
+  // --- Reveal All Answers ---
   const handleRevealAll = async () => {
     if (!currentQuestion) return;
 
@@ -670,6 +679,22 @@ function HostPage({
             onSave={(name) => handleSetTeamName('b', name)}
           />
         </div>
+        
+        {/* --- NEW: Manual Score Control --- */}
+        <div className="mt-8 grid grid-cols-2 gap-6">
+          <ManualScoreEditor
+            teamName={gameState.team_a_name}
+            currentScore={gameState.team_a_score}
+            onSetScore={(score) => handleSetScore('a', score)}
+            color="indigo"
+          />
+          <ManualScoreEditor
+            teamName={gameState.team_b_name}
+            currentScore={gameState.team_b_score}
+            onSetScore={(score) => handleSetScore('b', score)}
+            color="amber"
+          />
+        </div>
       </main>
     </div>
   );
@@ -688,18 +713,42 @@ function DisplayPage({
     () => JSON.parse(gameState.revealed_answers_json) as string[],
     [gameState.revealed_answers_json]
   );
+  
+  const scoreSfx = useMemo(() => (
+    typeof window !== 'undefined' ? new Audio('/audio/score.wav') : null
+  ), []);
+
+  const wrongSfx = useMemo(() => (
+    typeof window !== 'undefined' ? new Audio('/audio/wrong.wav') : null
+  ), []);
+
+  const buzzerSfx = useMemo(() => (
+    typeof window !== 'undefined' ? new Audio('/audio/buzzer.wav') : null
+  ), []);
+  
+  // --- State for Sound Triggers ---
   const [lastStrikeCount, setLastStrikeCount] = useState(gameState.strikes);
+  const [lastRevealedCount, setLastRevealedCount] = useState(revealedAnswers.length);
 
   useEffect(() => {
     if (!gameState) return;
 
-    // --- Strike Animation Logic ---
+    // --- Strike Animation & Sound Logic ---
     if (gameState.strikes > lastStrikeCount) {
+      wrongSfx?.play();
       setShowStrike(true);
       setTimeout(() => setShowStrike(false), 1500);
     }
     setLastStrikeCount(gameState.strikes); // Update tracker
-  }, [gameState, lastStrikeCount]);
+    
+    // --- Score Sound Logic ---
+    const newRevealedCount = revealedAnswers.length;
+    if (newRevealedCount > lastRevealedCount) {
+      scoreSfx?.play();
+    }
+    setLastRevealedCount(newRevealedCount);
+
+  }, [gameState, lastStrikeCount, lastRevealedCount, revealedAnswers, scoreSfx, wrongSfx]);
 
   // Split answers into two columns
   const { leftAnswers, rightAnswers } = useMemo(() => {
@@ -817,6 +866,9 @@ function BuzzerPage({ gameState }: { gameState: GameState }) {
 
   const handleBuzz = async () => {
     if (!team || gameState.buzzer_state !== 'armed') return;
+
+    // --- NEW: Play sound immediately ---
+    buzzerSfx?.play();
 
     await supabase
       .from('game_state')
@@ -1287,6 +1339,57 @@ function NameEditor({
     </div>
   );
 }
+
+// --- NEW: Manual Score Editor Component ---
+function ManualScoreEditor({
+  teamName,
+  currentScore,
+  onSetScore,
+  color,
+}: {
+  teamName: string;
+  currentScore: number;
+  onSetScore: (score: number) => void;
+  color: 'indigo' | 'amber';
+}) {
+  const [score, setScore] = useState(currentScore);
+  
+  // Keep local state in sync with global state
+  useEffect(() => {
+    setScore(currentScore);
+  }, [currentScore]);
+
+  const handleSet = () => {
+    onSetScore(Number(score));
+  };
+
+  return (
+    <div className="p-4 bg-slate-800 rounded-lg">
+      <h3
+        className={`text-lg font-semibold mb-2 ${
+          color === 'indigo' ? 'text-indigo-400' : 'text-amber-400'
+        }`}
+      >
+        Manual Score: {teamName}
+      </h3>
+      <div className="flex gap-2">
+        <input
+          type="number"
+          value={score}
+          onChange={(e) => setScore(Number(e.target.value))}
+          className="flex-1 px-3 py-2 bg-slate-700 text-white rounded-lg border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        />
+        <button
+          onClick={handleSet}
+          className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg flex items-center gap-2"
+        >
+          <Check size={18} /> Set Score
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 // --- 8. EDITOR PAGE SUB-COMPONENTS ---
 
