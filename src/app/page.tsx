@@ -714,17 +714,13 @@ function DisplayPage({
     [gameState.revealed_answers_json]
   );
   
+  // --- Audio ---
   const scoreSfx = useMemo(() => (
     typeof window !== 'undefined' ? new Audio('/audio/score.wav') : null
   ), []);
-
-  const wrongSfx = useMemo(() => (
-    typeof window !== 'undefined' ? new Audio('/audio/wrong.wav') : null
-  ), []);
-
-  const buzzerSfx = useMemo(() => (
-    typeof window !== 'undefined' ? new Audio('/audio/buzzer.wav') : null
-  ), []);
+  // const wrongSfx = useMemo(() => (
+  //   typeof window !== 'undefined' ? new Audio('/audio/wrong.wav') : null
+  // ), []);
   
   // --- State for Sound Triggers ---
   const [lastStrikeCount, setLastStrikeCount] = useState(gameState.strikes);
@@ -735,7 +731,7 @@ function DisplayPage({
 
     // --- Strike Animation & Sound Logic ---
     if (gameState.strikes > lastStrikeCount) {
-      wrongSfx?.play();
+      // wrongSfx?.play();
       setShowStrike(true);
       setTimeout(() => setShowStrike(false), 1500);
     }
@@ -748,7 +744,7 @@ function DisplayPage({
     }
     setLastRevealedCount(newRevealedCount);
 
-  }, [gameState, lastStrikeCount, lastRevealedCount, revealedAnswers, scoreSfx, wrongSfx]);
+  }, [gameState, lastStrikeCount, lastRevealedCount, revealedAnswers, scoreSfx]);
 
   // Split answers into two columns
   const { leftAnswers, rightAnswers } = useMemo(() => {
@@ -850,6 +846,11 @@ function DisplayPage({
 // --- 5. BUZZER PAGE ---
 function BuzzerPage({ gameState }: { gameState: GameState }) {
   const [team, setTeam] = useState<'a' | 'b' | null>(null);
+
+  // --- NEW: Buzzer Sound (Moved here) ---
+  const buzzerSfx = useMemo(() => (
+    typeof window !== 'undefined' ? new Audio('/audio/buzzer.wav') : null
+  ), []);
 
   useEffect(() => {
     try {
