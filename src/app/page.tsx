@@ -75,7 +75,9 @@ type GameState = {
   revealed_answers_json: string;
   buzzer_state: 'armed' | 'locked';
   buzzer_winner: 'a' | 'b' | null;
-  strikes: number;
+  // --- NEW: Separate Strikes ---
+  team_a_strikes: number;
+  team_b_strikes: number;
 };
 type EditorData = Round[];
 type FullQuestion = Question & { answers: Answer[] };
@@ -425,7 +427,9 @@ function HostPage({
         buzzer_state: 'armed',
         buzzer_winner: null,
         revealed_answers_json: '[]',
-        strikes: 0,
+        // --- NEW: Reset both strikes ---
+        team_a_strikes: 0,
+        team_b_strikes: 0,
       })
       .eq('id', 1);
   };
@@ -445,7 +449,9 @@ function HostPage({
         buzzer_state: 'armed',
         buzzer_winner: null,
         revealed_answers_json: '[]',
-        strikes: 0,
+        // --- NEW: Reset both strikes ---
+        team_a_strikes: 0,
+        team_b_strikes: 0,
       })
       .eq('id', 1);
   };
@@ -457,14 +463,17 @@ function HostPage({
       .eq('id', 1);
   };
 
-  const handleGiveStrike = async () => {
-    const currentStrikes = gameState.strikes || 0;
+  // --- NEW: Give Strike to a specific team ---
+  const handleGiveStrike = async (team: 'a' | 'b') => {
+    const currentStrikes = team === 'a' ? gameState.team_a_strikes : gameState.team_b_strikes;
+    const strikeField = team === 'a' ? 'team_a_strikes' : 'team_b_strikes';
+
     if (currentStrikes >= 3) return;
 
     await supabase
       .from('game_state')
       .update({
-        strikes: currentStrikes + 1,
+        [strikeField]: currentStrikes + 1,
         buzzer_state: 'armed', // Re-arm buzzers
         buzzer_winner: null,
       })
@@ -561,7 +570,9 @@ function HostPage({
             teamAName={gameState.team_a_name}
             teamBName={gameState.team_b_name}
             onReset={handleResetBuzzers}
-            strikes={gameState.strikes}
+            // --- NEW: Pass both strike counts ---
+            teamAStrikes={gameState.team_a_strikes}
+            teamBStrikes={gameState.team_b_strikes}
           />
           <ScoreBox
             name={gameState.team_b_name}
@@ -576,34 +587,47 @@ function HostPage({
         {/* Global Controls */}
         <div className="mb-8 p-6 bg-slate-800 rounded-lg">
           <h3 className="text-xl font-semibold mb-4">Global Controls</h3>
-          <div className="flex gap-4">
-            <button
-              onClick={handleGiveStrike}
-              disabled={gameState.strikes >= 3 || !currentQuestion}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 rounded-lg hover:bg-red-500 transition-colors disabled:bg-slate-600 disabled:opacity-50"
-            >
-              <XCircle size={18} />
-              Give Strike ({gameState.strikes})
-            </button>
-            <button
-              onClick={handleClearBoard}
-              className="flex-1 px-4 py-2 bg-slate-600 rounded-lg hover:bg-slate-500 transition-colors"
-            >
-              Clear Board
-            </button>
-            <button
-              onClick={handleResetScores}
-              className="flex-1 px-4 py-2 bg-red-800 rounded-lg hover:bg-red-700 transition-colors"
-            >
-              Reset All Scores
-            </button>
-            <a
-              href="/#editor"
-              target="_blank"
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-700 rounded-lg hover:bg-green-600 transition-colors"
-            >
-              <Edit size={18} /> Open Editor
-            </a>
+          <div className="flex flex-col gap-4">
+            {/* --- NEW: Strike Buttons --- */}
+            <div className="flex gap-4">
+              <button
+                onClick={() => handleGiveStrike('a')}
+                disabled={gameState.team_a_strikes >= 3 || !currentQuestion}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 rounded-lg hover:bg-red-500 transition-colors disabled:bg-slate-600 disabled:opacity-50"
+              >
+                <XCircle size={18} />
+                Strike {gameState.team_a_name}
+              </button>
+              <button
+                onClick={() => handleGiveStrike('b')}
+                disabled={gameState.team_b_strikes >= 3 || !currentQuestion}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-600 rounded-lg hover:bg-red-500 transition-colors disabled:bg-slate-600 disabled:opacity-50"
+              >
+                <XCircle size={18} />
+                Strike {gameState.team_b_name}
+              </button>
+            </div>
+            <div className="flex gap-4">
+              <button
+                onClick={handleClearBoard}
+                className="flex-1 px-4 py-2 bg-slate-600 rounded-lg hover:bg-slate-500 transition-colors"
+              >
+                Clear Board
+              </button>
+              <button
+                onClick={handleResetScores}
+                className="flex-1 px-4 py-2 bg-red-800 rounded-lg hover:bg-red-700 transition-colors"
+              >
+                Reset All Scores
+              </button>
+              <a
+                href="/#editor"
+                target="_blank"
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-700 rounded-lg hover:bg-green-600 transition-colors"
+              >
+                <Edit size={18} /> Open Editor
+              </a>
+            </div>
           </div>
         </div>
 
@@ -718,24 +742,27 @@ function DisplayPage({
   const scoreSfx = useMemo(() => (
     typeof window !== 'undefined' ? new Audio('/audio/score.wav') : null
   ), []);
-  // const wrongSfx = useMemo(() => (
-  //   typeof window !== 'undefined' ? new Audio('/audio/wrong.wav') : null
-  // ), []);
+  const wrongSfx = useMemo(() => (
+    typeof window !== 'undefined' ? new Audio('/audio/wrong.wav') : null
+  ), []);
   
   // --- State for Sound Triggers ---
-  const [lastStrikeCount, setLastStrikeCount] = useState(gameState.strikes);
+  // --- NEW: Track both strike counts ---
+  const [lastStrikeCountA, setLastStrikeCountA] = useState(gameState.team_a_strikes);
+  const [lastStrikeCountB, setLastStrikeCountB] = useState(gameState.team_b_strikes);
   const [lastRevealedCount, setLastRevealedCount] = useState(revealedAnswers.length);
 
   useEffect(() => {
     if (!gameState) return;
 
     // --- Strike Animation & Sound Logic ---
-    if (gameState.strikes > lastStrikeCount) {
-      // wrongSfx?.play();
+    if (gameState.team_a_strikes > lastStrikeCountA || gameState.team_b_strikes > lastStrikeCountB) {
+      wrongSfx?.play();
       setShowStrike(true);
       setTimeout(() => setShowStrike(false), 1500);
     }
-    setLastStrikeCount(gameState.strikes); // Update tracker
+    setLastStrikeCountA(gameState.team_a_strikes); // Update tracker
+    setLastStrikeCountB(gameState.team_b_strikes); // Update tracker
     
     // --- Score Sound Logic ---
     const newRevealedCount = revealedAnswers.length;
@@ -744,7 +771,7 @@ function DisplayPage({
     }
     setLastRevealedCount(newRevealedCount);
 
-  }, [gameState, lastStrikeCount, lastRevealedCount, revealedAnswers, scoreSfx]);
+  }, [gameState, lastStrikeCountA, lastStrikeCountB, lastRevealedCount, revealedAnswers, scoreSfx, wrongSfx]);
 
   // Split answers into two columns
   const { leftAnswers, rightAnswers } = useMemo(() => {
@@ -766,21 +793,31 @@ function DisplayPage({
     <div className="relative h-screen w-screen flex flex-col p-8 lg:p-12 overflow-hidden bg-slate-900 text-slate-100">
       {/* Scoreboard */}
       <div className="flex justify-between items-start mb-8 px-4 gap-6">
-        <ScoreBox
-          name={gameState.team_a_name}
-          score={gameState.team_a_score}
-          color="indigo"
-          isWinner={gameState.buzzer_winner === 'a'}
-          isDisplay={true}
-        />
-        <StrikeDisplay count={gameState.strikes} />
-        <ScoreBox
-          name={gameState.team_b_name}
-          score={gameState.team_b_score}
-          color="amber"
-          isWinner={gameState.buzzer_winner === 'b'}
-          isDisplay={true}
-        />
+        <div className="flex-1 flex flex-col items-center gap-4">
+          <ScoreBox
+            name={gameState.team_a_name}
+            score={gameState.team_a_score}
+            color="indigo"
+            isWinner={gameState.buzzer_winner === 'a'}
+            isDisplay={true}
+          />
+          {/* --- NEW: Team A Strikes --- */}
+          <TeamStrikeDisplay count={gameState.team_a_strikes} color="indigo" />
+        </div>
+
+        {/* <StrikeDisplay count={gameState.strikes} /> */}
+        
+        <div className="flex-1 flex flex-col items-center gap-4">
+          <ScoreBox
+            name={gameState.team_b_name}
+            score={gameState.team_b_score}
+            color="amber"
+            isWinner={gameState.buzzer_winner === 'b'}
+            isDisplay={true}
+          />
+          {/* --- NEW: Team B Strikes --- */}
+          <TeamStrikeDisplay count={gameState.team_b_strikes} color="amber" />
+        </div>
       </div>
 
       {/* Question */}
@@ -930,6 +967,9 @@ function BuzzerPage({ gameState }: { gameState: GameState }) {
       text = 'They Buzzed!';
     }
     
+    // --- NEW: Smaller text for status ---
+    const textSize = text === 'BUZZ!' ? 'text-8xl' : 'text-5xl';
+    
     const textColor = (team === 'b' && !isDisabled) || (team === 'b' && isMyTurn)
       ? 'text-black' 
       : 'text-white';
@@ -939,11 +979,11 @@ function BuzzerPage({ gameState }: { gameState: GameState }) {
         onClick={handleBuzz}
         disabled={isDisabled}
         className={`w-full h-full flex items-center justify-center
-          text-8xl font-black uppercase rounded-lg shadow-xl
+          font-black uppercase rounded-lg shadow-xl
           transition-all duration-150
           focus:outline-none
           active:scale-95
-          ${bgColor} ${textColor}
+          ${bgColor} ${textColor} ${textSize}
           ${isDisabled ? 'opacity-60 cursor-not-allowed' : 'hover:opacity-90'}
           ${ringColor ? `ring-8 ${ringColor}` : ''}
         `}
@@ -1170,7 +1210,7 @@ function ScoreBox({
       : 'ring-1';
   
   const sizeClasses = isDisplay
-    ? 'p-6 lg:p-8 w-full max-w-md'
+    ? 'p-6 lg:p-8 w-full' // Removed max-w-md to allow box to fill space
     : 'p-6';
   
   const nameSize = isDisplay ? 'text-4xl lg:text-5xl' : 'text-3xl';
@@ -1178,12 +1218,38 @@ function ScoreBox({
 
   return (
     <div
-      className={`bg-slate-800 rounded-lg text-center ${colorClasses[color]} ${winnerClasses} ${sizeClasses} transition-all`}
+      className={`bg-slate-800 rounded-lg ${isDisplay ? 'text-center' : 'text-center'} ${colorClasses[color]} ${winnerClasses} ${sizeClasses} transition-all`}
     >
       <h2 className={`${nameSize} font-bold uppercase truncate`}>{name}</h2>
       <div className={`${scoreSize} font-black text-white`}>{score}</div>
     </div>
   );
+}
+
+// --- NEW: Reusable Strike Display for Host Panel ---
+function HostStrikeDisplay({ count, teamName, color }: {
+  count: number;
+  teamName: string;
+  color: 'indigo' | 'amber';
+}) {
+  return (
+    <div className="text-center">
+      <span className={`font-semibold ${color === 'indigo' ? 'text-indigo-400' : 'text-amber-400'}`}>
+        {teamName}
+      </span>
+      <div className="flex justify-center gap-2 mt-1">
+        {[1, 2, 3].map((i) => (
+          <XCircle
+            key={i}
+            size={24}
+            className={
+              i <= count ? 'text-red-500' : 'text-slate-600'
+            }
+          />
+        ))}
+      </div>
+    </div>
+  )
 }
 
 function BuzzerStatus({
@@ -1192,26 +1258,24 @@ function BuzzerStatus({
   teamAName,
   teamBName,
   onReset,
-  strikes,
+  // --- NEW: Separate strikes ---
+  teamAStrikes,
+  teamBStrikes,
 }: {
   state: 'armed' | 'locked';
   winner: 'a' | 'b' | null;
   teamAName: string;
   teamBName: string;
   onReset: () => void;
-  strikes: number;
+  teamAStrikes: number;
+  teamBStrikes: number;
 }) {
+
+  // --- NEW: Split strike display ---
   const strikeDisplay = (
-    <div className="flex justify-center gap-2 mt-2">
-      {[1, 2, 3].map((i) => (
-        <XCircle
-          key={i}
-          size={24}
-          className={
-            i <= strikes ? 'text-red-500' : 'text-slate-600'
-          }
-        />
-      ))}
+    <div className="grid grid-cols-2 gap-4 mt-3">
+      <HostStrikeDisplay count={teamAStrikes} teamName={teamAName} color="indigo" />
+      <HostStrikeDisplay count={teamBStrikes} teamName={teamBName} color="amber" />
     </div>
   );
 
@@ -1704,26 +1768,33 @@ function AnswerCard({
   );
 }
 
-function StrikeDisplay({ count }: { count: number }) {
+// --- NEW: Reusable Strike Display for Display Page ---
+function TeamStrikeDisplay({ count, color }: {
+  count: number;
+  color: 'indigo' | 'amber';
+}) {
+  const colorClass = color === 'indigo' ? 'text-indigo-600' : 'text-amber-600';
+  const inactiveColor = color === 'indigo' ? 'text-indigo-900' : 'text-amber-900';
+
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex justify-center gap-4">
       {[1, 2, 3].map((i) => (
         <motion.div
           key={i}
           animate={{
-            scale: i <= count ? 1 : 0.7,
-            opacity: i <= count ? 1 : 0.3,
+            scale: i <= count ? 1 : 0.8,
+            opacity: i <= count ? 1 : 0.4,
           }}
           transition={{ type: 'spring', stiffness: 400, damping: 20 }}
         >
           <XCircle
-            size={64}
+            size={48}
             className={
               i <= count
-                ? 'text-red-600'
-                : 'text-slate-700'
+                ? 'text-red-500' // Always show active strikes as red
+                : 'text-slate-700' // Inactive strikes
             }
-            strokeWidth={1.5}
+            strokeWidth={2}
           />
         </motion.div>
       ))}
